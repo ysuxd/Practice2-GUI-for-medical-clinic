@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QMessageBox, QLineEdit,
     QHeaderView, QDialog, QFormLayout, QDateEdit, QComboBox, QTimeEdit
 )
-from PyQt6.QtCore import Qt, QDate, QTime
+from PyQt6.QtCore import Qt, QDate, QTime, QDateTime
 from PyQt6.QtGui import QColor, QPalette, QIcon
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
@@ -348,7 +348,6 @@ class AppointmentsApp(QMainWindow):
                 logging.error(f"Ошибка подключения pdf_btn.clicked: {str(e)}")
                 QMessageBox.critical(self, "Ошибка", f"Ошибка подключения сигнала pdf_btn: {str(e)}")
 
-            # Connect signal for schedule button
             try:
                 self.schedule_btn.clicked.connect(self.show_schedule_dialog)
                 logging.debug("Сигнал schedule_btn.clicked подключен")
@@ -410,7 +409,7 @@ class AppointmentsApp(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Записаться на прием")
-        dialog.setFixedSize(600, 650)  # Increased height to accommodate price field
+        dialog.setFixedSize(600, 650)
 
         layout = QFormLayout(dialog)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -433,7 +432,6 @@ class AppointmentsApp(QMainWindow):
             medical_cards = self.cursor.fetchall()
             for card_id, card_type in medical_cards:
                 medical_card_combo.addItem(f"{card_type} (ID: {card_id})", card_id)
-            # Pre-select the current medical_card_id
             for i in range(medical_card_combo.count()):
                 if medical_card_combo.itemData(i) == self.medical_card_id:
                     medical_card_combo.setCurrentIndex(i)
@@ -446,6 +444,7 @@ class AppointmentsApp(QMainWindow):
         date_input.setDate(QDate.currentDate())
         date_input.setCalendarPopup(True)
         date_input.setDisplayFormat("dd.MM.yyyy")
+        date_input.setMinimumDate(QDate.currentDate())  # Prevent past dates
 
         time_table = QTableWidget()
         time_table.setColumnCount(1)
@@ -460,15 +459,18 @@ class AppointmentsApp(QMainWindow):
         price_input.setReadOnly(True)
         price_input.setPlaceholderText("Цена будет установлена автоматически")
 
-        selected_time = [None]  # Store selected time in a list to allow modification in nested function
+        selected_time = [None]
 
         def update_time_table():
             try:
-                # Generate time slots from 8:00 to 16:00 with 30-minute intervals
                 start_hour = 8
                 end_hour = 16
-                slots_per_hour = 2  # 30-minute intervals
+                slots_per_hour = 2
                 time_slots = []
+                current_date = QDate.currentDate()
+                selected_date = date_input.date()
+                now = QTime.currentTime()
+
                 for hour in range(start_hour, end_hour):
                     for minute in range(0, 60, 30):
                         time = QTime(hour, minute)
@@ -478,7 +480,10 @@ class AppointmentsApp(QMainWindow):
                 for row, slot in enumerate(time_slots):
                     item = QTableWidgetItem(slot.toString("HH:mm"))
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    item.setBackground(QColor(0, 255, 0))  # Green by default (free)
+                    item.setBackground(QColor(0, 255, 0))
+                    if selected_date == current_date and slot < now:
+                        item.setBackground(QColor(128, 128, 128))  # Gray for past times
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
                     time_table.setItem(row, 0, item)
 
                 doctor_id = doctor_combo.currentData()
@@ -487,7 +492,6 @@ class AppointmentsApp(QMainWindow):
                     return
 
                 occupied_slots = []
-                # Fetch occupied time slots
                 self.cursor.execute("""
                     SELECT starttime, endtime
                     FROM appointment
@@ -501,15 +505,18 @@ class AppointmentsApp(QMainWindow):
                     current = start
                     while current < end:
                         occupied_slots.append(current)
-                        current = current.addSecs(30 * 60)  # Increment by 30 minutes
+                        current = current.addSecs(30 * 60)
 
                 for row, slot in enumerate(time_slots):
                     item = time_table.item(row, 0)
                     if slot in occupied_slots:
-                        item.setBackground(QColor(255, 0, 0))  # Red for occupied
+                        item.setBackground(QColor(255, 0, 0))
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                    elif selected_date == current_date and slot < now:
+                        item.setBackground(QColor(128, 128, 128))
                         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
                     else:
-                        item.setBackground(QColor(0, 255, 0))  # Green for free
+                        item.setBackground(QColor(0, 255, 0))
                         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsSelectable)
 
             except Exception as e:
@@ -549,19 +556,27 @@ class AppointmentsApp(QMainWindow):
             try:
                 doctor_id = doctor_combo.currentData()
                 medical_card_id = medical_card_combo.currentData()
-                appointment_date = date_input.date().toString("yyyy-MM-dd")
+                appointment_date = date_input.date()
                 if selected_time[0] is None:
                     QMessageBox.warning(dialog, "Ошибка", "Выберите время из таблицы")
                     return
                 start_time = selected_time[0].toString("HH:mm:ss")
-                end_time = selected_time[0].addSecs(1800).toString("HH:mm:ss")  # 30 minutes later
+                end_time = selected_time[0].addSecs(1800).toString("HH:mm:ss")
                 price = price_input.text().strip()
+
+                current_date = QDate.currentDate()
+                current_time = QTime.currentTime()
+                appointment_datetime = QDateTime(appointment_date, selected_time[0])
+                current_datetime = QDateTime(current_date, current_time)
+
+                if appointment_datetime < current_datetime:
+                    QMessageBox.warning(dialog, "Ошибка", "Нельзя записаться на прошедшую дату или время")
+                    return
 
                 if not all([doctor_id, medical_card_id, appointment_date, start_time, price]):
                     QMessageBox.warning(dialog, "Ошибка", "Заполните все обязательные поля, включая врача для установки цены")
                     return
 
-                # Check for overlapping appointments
                 self.cursor.execute("""
                     SELECT COUNT(*) 
                     FROM appointment 
@@ -572,7 +587,7 @@ class AppointmentsApp(QMainWindow):
                         (starttime < %s AND endtime >= %s) OR
                         (starttime >= %s AND endtime <= %s)
                     )
-                """, (doctor_id, appointment_date, start_time, start_time, end_time, end_time, start_time, end_time))
+                """, (doctor_id, appointment_date.toString("yyyy-MM-dd"), start_time, start_time, end_time, end_time, start_time, end_time))
                 overlap_count = self.cursor.fetchone()[0]
                 if overlap_count > 0:
                     QMessageBox.warning(dialog, "Ошибка", "В это время врач уже занят")
@@ -584,11 +599,11 @@ class AppointmentsApp(QMainWindow):
                     """INSERT INTO appointment 
                     (patientid, medicalcardid, doctorid, appointmentdate, starttime, endtime, status, appointmentprice) 
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (self.patient_id, medical_card_id, doctor_id, appointment_date, start_time, end_time, "В процессе", price_value)
+                    (self.patient_id, medical_card_id, doctor_id, appointment_date.toString("yyyy-MM-dd"), start_time, end_time, "В процессе", price_value)
                 )
                 self.conn.commit()
                 QMessageBox.information(dialog, "Успех", "Вы успешно записались на прием")
-                self.load_data()  # Refresh the table after scheduling
+                self.load_data()
                 dialog.close()
             except Exception as e:
                 self.conn.rollback()
@@ -598,10 +613,610 @@ class AppointmentsApp(QMainWindow):
         ok_btn.clicked.connect(schedule_appointment)
         cancel_btn.clicked.connect(dialog.close)
 
-        # Initial table update
         update_time_table()
 
         dialog.exec()
+
+    def show_add_dialog(self):
+        logging.debug("Открытие диалога добавления приема")
+        try:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Добавить прием")
+            dialog.setFixedSize(500, 700)
+
+            layout = QFormLayout(dialog)
+            layout.setContentsMargins(20, 20, 20, 20)
+            layout.setSpacing(15)
+
+            patient_combo = QComboBox()
+            patient_combo.addItem("Не выбрано", None)
+            for patient in self.patients:
+                patient_combo.addItem(patient[1], patient[0])
+
+            medical_card_combo = QComboBox()
+            medical_card_combo.addItem("Не выбрано", None)
+            for card_id, in self.medical_cards:
+                medical_card_combo.addItem(str(card_id), card_id)
+            medical_card_combo.setEnabled(False)
+
+            def update_medical_card():
+                selected_patient_id = patient_combo.currentData()
+                medical_card_combo.setCurrentIndex(0)
+                if selected_patient_id:
+                    for patient in self.patients:
+                        if patient[0] == selected_patient_id:
+                            medical_card_id = patient[2]
+                            for i in range(medical_card_combo.count()):
+                                if medical_card_combo.itemData(i) == medical_card_id:
+                                    medical_card_combo.setCurrentIndex(i)
+                                    break
+                            break
+
+            patient_combo.currentIndexChanged.connect(update_medical_card)
+
+            doctor_combo = QComboBox()
+            doctor_combo.addItem("Не выбрано", None)
+            for doctor in self.doctors:
+                doctor_combo.addItem(doctor[1], doctor[0])
+
+            diagnosis_combo = QComboBox()
+            diagnosis_combo.addItem("Не выбрано", None)
+            for diagnosis in self.diagnoses:
+                diagnosis_combo.addItem(diagnosis[1], diagnosis[0])
+
+            date_input = QDateEdit()
+            date_input.setDisplayFormat("dd.MM.yyyy")
+            date_input.setDate(QDate.currentDate())
+            date_input.setCalendarPopup(True)
+            date_input.setMinimumDate(QDate.currentDate())  # Prevent past dates
+
+            time_table = QTableWidget()
+            time_table.setColumnCount(1)
+            time_table.setHorizontalHeaderLabels(["Время"])
+            time_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+            time_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            time_table.horizontalHeader().setStretchLastSection(True)
+            time_table.verticalHeader().setVisible(False)
+            time_table.setFixedHeight(150)
+
+            selected_time = [None]
+
+            def update_time_table():
+                try:
+                    start_hour = 8
+                    end_hour = 16
+                    slots_per_hour = 2
+                    time_slots = []
+                    current_date = QDate.currentDate()
+                    selected_date = date_input.date()
+                    now = QTime.currentTime()
+
+                    for hour in range(start_hour, end_hour):
+                        for minute in range(0, 60, 30):
+                            time = QTime(hour, minute)
+                            time_slots.append(time)
+
+                    time_table.setRowCount(len(time_slots))
+                    for row, slot in enumerate(time_slots):
+                        item = QTableWidgetItem(slot.toString("HH:mm"))
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        item.setBackground(QColor(0, 255, 0))
+                        if selected_date == current_date and slot < now:
+                            item.setBackground(QColor(128, 128, 128))
+                            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                        time_table.setItem(row, 0, item)
+
+                    doctor_id = doctor_combo.currentData()
+                    appointment_date = date_input.date().toString("yyyy-MM-dd")
+                    if not doctor_id or not appointment_date:
+                        return
+
+                    occupied_slots = []
+                    self.cursor.execute("""
+                        SELECT starttime, endtime
+                        FROM appointment
+                        WHERE doctorid = %s AND appointmentdate = %s
+                    """, (doctor_id, appointment_date))
+                    appointments = self.cursor.fetchall()
+
+                    for start_time, end_time in appointments:
+                        start = QTime.fromString(str(start_time), "HH:mm:ss")
+                        end = QTime.fromString(str(end_time), "HH:mm:ss")
+                        current = start
+                        while current < end:
+                            occupied_slots.append(current)
+                            current = current.addSecs(30 * 60)
+
+                    for row, slot in enumerate(time_slots):
+                        item = time_table.item(row, 0)
+                        if slot in occupied_slots:
+                            item.setBackground(QColor(255, 0, 0))
+                            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                        elif selected_date == current_date and slot < now:
+                            item.setBackground(QColor(128, 128, 128))
+                            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                        else:
+                            item.setBackground(QColor(0, 255, 0))
+                            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsSelectable)
+
+                except Exception as e:
+                    logging.error(f"Ошибка при обновлении таблицы времени: {str(e)}")
+                    QMessageBox.warning(dialog, "Ошибка", f"Не удалось загрузить временные слоты: {str(e)}")
+
+            def on_time_table_clicked():
+                selected_items = time_table.selectedItems()
+                if selected_items:
+                    selected_time[0] = QTime.fromString(selected_items[0].text(), "HH:mm")
+
+            doctor_combo.currentIndexChanged.connect(update_time_table)
+            date_input.dateChanged.connect(update_time_table)
+            time_table.itemClicked.connect(on_time_table_clicked)
+
+            status_combo = QComboBox()
+            status_options = ["Завершён", "Отменён", "Назначен"]
+            status_combo.addItems(status_options)
+            status_combo.setCurrentText("Назначен")
+
+            price_input = QLineEdit()
+            price_input.setReadOnly(True)
+            price_input.setPlaceholderText("Цена будет установлена автоматически")
+
+            def update_price():
+                doctor_id = doctor_combo.currentData()
+                price = self.doctor_prices.get(doctor_id, None)
+                price_input.setText(f"{price:.2f}" if price is not None else "")
+
+            doctor_combo.currentIndexChanged.connect(update_price)
+
+            btn_box = QHBoxLayout()
+            btn_box.setSpacing(10)
+
+            ok_btn = QPushButton("Добавить")
+            cancel_btn = QPushButton("Отмена")
+
+            btn_box.addWidget(ok_btn)
+            btn_box.addWidget(cancel_btn)
+
+            layout.addRow("Пациент:", patient_combo)
+            layout.addRow("Номер мед. карты:", medical_card_combo)
+            layout.addRow("Врач:", doctor_combo)
+            layout.addRow("Диагноз:", diagnosis_combo)
+            layout.addRow("Дата:", date_input)
+            layout.addRow("Доступное время:", time_table)
+            layout.addRow("Статус:", status_combo)
+            layout.addRow("Цена:", price_input)
+            layout.addRow(btn_box)
+
+            def add_appointment():
+                try:
+                    patient_id = patient_combo.currentData()
+                    medical_card_id = medical_card_combo.currentData()
+                    doctor_id = doctor_combo.currentData()
+                    diagnosis_id = diagnosis_combo.currentData()
+                    date = date_input.date()
+                    if selected_time[0] is None:
+                        QMessageBox.warning(dialog, "Ошибка", "Выберите время из таблицы")
+                        return
+                    starttime = selected_time[0].toString("HH:mm:ss")
+                    endtime = selected_time[0].addSecs(1800).toString("HH:mm:ss")
+                    status = status_combo.currentText()
+                    price = price_input.text().strip()
+
+                    current_date = QDate.currentDate()
+                    current_time = QTime.currentTime()
+                    appointment_datetime = QDateTime(date, selected_time[0])
+                    current_datetime = QDateTime(current_date, current_time)
+
+                    if appointment_datetime < current_datetime:
+                        QMessageBox.warning(dialog, "Ошибка", "Нельзя добавить прием на прошедшую дату или время")
+                        return
+
+                    if not all([patient_id, medical_card_id, doctor_id, date, starttime, price]):
+                        QMessageBox.warning(dialog, "Ошибка",
+                                            "Заполните все обязательные поля, включая врача для установки цены")
+                        return
+
+                    self.cursor.execute("""
+                        SELECT COUNT(*) 
+                        FROM appointment 
+                        WHERE doctorid = %s 
+                        AND appointmentdate = %s 
+                        AND (
+                            (starttime <= %s AND endtime > %s) OR
+                            (starttime < %s AND endtime >= %s) OR
+                            (starttime >= %s AND endtime <= %s)
+                        )
+                    """, (doctor_id, date.toString("yyyy-MM-dd"), starttime, starttime, endtime, endtime, starttime, endtime))
+                    overlap_count = self.cursor.fetchone()[0]
+                    if overlap_count > 0:
+                        QMessageBox.warning(dialog, "Ошибка", "В это время врач уже занят")
+                        return
+
+                    price_value = float(price) if price else None
+
+                    self.cursor.execute(
+                        """INSERT INTO appointment 
+                        (patientid, medicalcardid, doctorid, diagnosisid, appointmentdate, 
+                        starttime, endtime, status, appointmentprice) 
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) 
+                        RETURNING appointmentid""",
+                        (patient_id, medical_card_id, doctor_id, diagnosis_id, date.toString("yyyy-MM-dd"), starttime, endtime,
+                         status or None, price_value))
+
+                    new_id = self.cursor.fetchone()[0]
+                    self.conn.commit()
+
+                    row_pos = self.table.rowCount()
+                    self.table.insertRow(row_pos)
+
+                    patient_name = self.patient_dict.get(patient_id, "Неизвестный пациент")
+                    doctor_name = self.doctor_dict.get(doctor_id, "Неизвестный врач")
+                    diagnosis_name = self.diagnosis_dict.get(diagnosis_id, "Неизвестный диагноз")
+
+                    formatted_date = date_input.date().toString("dd.MM.yyyy")
+                    formatted_starttime = selected_time[0].toString("HH:mm")
+                    formatted_endtime = selected_time[0].addSecs(1800).toString("HH:mm")
+                    formatted_price = f"{price_value:.2f}" if price_value is not None else ""
+
+                    columns = [
+                        str(new_id), patient_name, str(medical_card_id), doctor_name,
+                        formatted_date, formatted_starttime, formatted_endtime,
+                        status or "", diagnosis_name, formatted_price
+                    ]
+
+                    for col_idx, value in enumerate(columns):
+                        item = QTableWidgetItem(value)
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                        if col_idx == 8:
+                            item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                        else:
+                            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        self.table.setItem(row_pos, col_idx, item)
+
+                    self.table.resizeRowToContents(row_pos)
+
+                    dialog.close()
+                    logging.debug("Прием успешно добавлен")
+                except Exception as e:
+                    self.conn.rollback()
+                    logging.error(f"Ошибка при добавлении приема: {str(e)}")
+                    QMessageBox.critical(dialog, "Ошибка", f"Не удалось добавить прием:\n{str(e)}")
+
+            ok_btn.clicked.connect(add_appointment)
+            cancel_btn.clicked.connect(dialog.close)
+
+            update_time_table()
+
+            dialog.exec()
+        except Exception as e:
+            logging.error(f"Ошибка в диалоге добавления: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Ошибка в диалоге добавления: {str(e)}")
+
+    def show_edit_dialog(self):
+        logging.debug("Открытие диалога редактирования приема")
+        try:
+            selected_items = self.table.selectedItems()
+            if not selected_items:
+                QMessageBox.warning(self, "Ошибка", "Выберите прием для редактирования")
+                return
+
+            row = selected_items[0].row()
+            appointment_id = int(self.table.item(row, 0).text())
+
+            current_patient_name = self.table.item(row, 1).text()
+            current_medical_card = self.table.item(row, 2).text()
+            current_doctor_name = self.table.item(row, 3).text()
+            current_date = QDate.fromString(self.table.item(row, 4).text(), "dd.MM.yyyy")
+            current_starttime = QTime.fromString(self.table.item(row, 5).text(), "HH:mm")
+            current_endtime = QTime.fromString(self.table.item(row, 6).text(), "HH:mm")
+            current_status = self.table.item(row, 7).text()
+            current_diagnosis_name = self.table.item(row, 8).text()
+            current_price = self.table.item(row, 9).text()
+
+            current_patient_id = None
+            for patient_id, patient_name in self.patient_dict.items():
+                if patient_name == current_patient_name:
+                    current_patient_id = patient_id
+                    break
+
+            current_doctor_id = None
+            for doctor_id, doctor_name in self.doctor_dict.items():
+                if doctor_name == current_doctor_name:
+                    current_doctor_id = doctor_id
+                    break
+
+            current_diagnosis_id = None
+            for diagnosis_id, diagnosis_name in self.diagnosis_dict.items():
+                if diagnosis_name == current_diagnosis_name:
+                    current_diagnosis_id = diagnosis_id
+                    break
+
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Редактировать прием")
+            dialog.setFixedSize(500, 700)
+
+            layout = QFormLayout(dialog)
+            layout.setContentsMargins(20, 20, 20, 20)
+            layout.setSpacing(15)
+
+            patient_combo = QComboBox()
+            patient_combo.addItem("Не выбрано", None)
+            current_patient_index = 0
+            for i, patient in enumerate(self.patients):
+                patient_combo.addItem(patient[1], patient[0])
+                if patient[0] == current_patient_id:
+                    current_patient_index = i + 1
+            patient_combo.setCurrentIndex(current_patient_index)
+
+            medical_card_combo = QComboBox()
+            medical_card_combo.addItem("Не выбрано", None)
+            current_card_index = 0
+            for i, (card_id,) in enumerate(self.medical_cards):
+                medical_card_combo.addItem(str(card_id), card_id)
+                if str(card_id) == current_medical_card:
+                    current_card_index = i + 1
+            medical_card_combo.setCurrentIndex(current_card_index)
+            medical_card_combo.setEnabled(False)
+
+            def update_medical_card():
+                selected_patient_id = patient_combo.currentData()
+                medical_card_combo.setCurrentIndex(0)
+                if selected_patient_id:
+                    for patient in self.patients:
+                        if patient[0] == selected_patient_id:
+                            medical_card_id = patient[2]
+                            for i in range(medical_card_combo.count()):
+                                if medical_card_combo.itemData(i) == medical_card_id:
+                                    medical_card_combo.setCurrentIndex(i)
+                                    break
+                            break
+
+            patient_combo.currentIndexChanged.connect(update_medical_card)
+
+            doctor_combo = QComboBox()
+            doctor_combo.addItem("Не выбрано", None)
+            current_doctor_index = 0
+            for i, doctor in enumerate(self.doctors):
+                doctor_combo.addItem(doctor[1], doctor[0])
+                if doctor[0] == current_doctor_id:
+                    current_doctor_index = i + 1
+            doctor_combo.setCurrentIndex(current_doctor_index)
+
+            diagnosis_combo = QComboBox()
+            diagnosis_combo.addItem("Не выбрано", None)
+            current_diagnosis_index = 0
+            for i, diagnosis in enumerate(self.diagnoses):
+                diagnosis_combo.addItem(diagnosis[1], diagnosis[0])
+                if diagnosis[0] == current_diagnosis_id:
+                    current_diagnosis_index = i + 1
+            diagnosis_combo.setCurrentIndex(current_diagnosis_index)
+
+            date_input = QDateEdit(current_date)
+            date_input.setDisplayFormat("dd.MM.yyyy")
+            date_input.setCalendarPopup(True)
+            date_input.setMinimumDate(QDate.currentDate())  # Prevent past dates
+
+            time_table = QTableWidget()
+            time_table.setColumnCount(1)
+            time_table.setHorizontalHeaderLabels(["Время"])
+            time_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+            time_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            time_table.horizontalHeader().setStretchLastSection(True)
+            time_table.verticalHeader().setVisible(False)
+            time_table.setFixedHeight(150)
+
+            selected_time = [current_starttime]
+
+            def update_time_table():
+                try:
+                    start_hour = 8
+                    end_hour = 16
+                    slots_per_hour = 2
+                    time_slots = []
+                    current_date = QDate.currentDate()
+                    selected_date = date_input.date()
+                    now = QTime.currentTime()
+
+                    for hour in range(start_hour, end_hour):
+                        for minute in range(0, 60, 30):
+                            time = QTime(hour, minute)
+                            time_slots.append(time)
+
+                    time_table.setRowCount(len(time_slots))
+                    for row, slot in enumerate(time_slots):
+                        item = QTableWidgetItem(slot.toString("HH:mm"))
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        item.setBackground(QColor(0, 255, 0))
+                        if selected_date == current_date and slot < now:
+                            item.setBackground(QColor(128, 128, 128))
+                            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                        time_table.setItem(row, 0, item)
+
+                    doctor_id = doctor_combo.currentData()
+                    appointment_date = date_input.date().toString("yyyy-MM-dd")
+                    if not doctor_id or not appointment_date:
+                        return
+
+                    occupied_slots = []
+                    self.cursor.execute("""
+                        SELECT starttime, endtime
+                        FROM appointment
+                        WHERE doctorid = %s AND appointmentdate = %s AND appointmentid != %s
+                    """, (doctor_id, appointment_date, appointment_id))
+                    appointments = self.cursor.fetchall()
+
+                    for start_time, end_time in appointments:
+                        start = QTime.fromString(str(start_time), "HH:mm:ss")
+                        end = QTime.fromString(str(end_time), "HH:mm:ss")
+                        current = start
+                        while current < end:
+                            occupied_slots.append(current)
+                            current = current.addSecs(30 * 60)
+
+                    for row, slot in enumerate(time_slots):
+                        item = time_table.item(row, 0)
+                        if slot in occupied_slots:
+                            item.setBackground(QColor(255, 0, 0))
+                            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                        elif selected_date == current_date and slot < now:
+                            item.setBackground(QColor(128, 128, 128))
+                            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                        else:
+                            item.setBackground(QColor(0, 255, 0))
+                            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsSelectable)
+
+                        if slot == current_starttime:
+                            time_table.setCurrentCell(row, 0)
+
+                except Exception as e:
+                    logging.error(f"Ошибка при обновлении таблицы времени: {str(e)}")
+                    QMessageBox.warning(dialog, "Ошибка", f"Не удалось загрузить временные слоты: {str(e)}")
+
+            def on_time_table_clicked():
+                selected_items = time_table.selectedItems()
+                if selected_items:
+                    selected_time[0] = QTime.fromString(selected_items[0].text(), "HH:mm")
+
+            doctor_combo.currentIndexChanged.connect(update_time_table)
+            date_input.dateChanged.connect(update_time_table)
+            time_table.itemClicked.connect(on_time_table_clicked)
+
+            status_combo = QComboBox()
+            status_options = ["Завершён", "Отменён", "Назначен"]
+            status_combo.addItems(status_options)
+            status_combo.setCurrentText(current_status if current_status in status_options else "Назначен")
+
+            price_input = QLineEdit(current_price)
+            price_input.setReadOnly(True)
+
+            def update_price():
+                doctor_id = doctor_combo.currentData()
+                price = self.doctor_prices.get(doctor_id, None)
+                price_input.setText(f"{price:.2f}" if price is not None else "")
+
+            doctor_combo.currentIndexChanged.connect(update_price)
+
+            btn_box = QHBoxLayout()
+            btn_box.setSpacing(10)
+
+            ok_btn = QPushButton("Сохранить")
+            cancel_btn = QPushButton("Отмена")
+
+            btn_box.addWidget(ok_btn)
+            btn_box.addWidget(cancel_btn)
+
+            layout.addRow("Пациент:", patient_combo)
+            layout.addRow("Номер мед. карты:", medical_card_combo)
+            layout.addRow("Врач:", doctor_combo)
+            layout.addRow("Диагноз:", diagnosis_combo)
+            layout.addRow("Дата:", date_input)
+            layout.addRow("Доступное время:", time_table)
+            layout.addRow("Статус:", status_combo)
+            layout.addRow("Цена:", price_input)
+            layout.addRow(btn_box)
+
+            def update_appointment():
+                try:
+                    patient_id = patient_combo.currentData()
+                    medical_card_id = medical_card_combo.currentData()
+                    doctor_id = doctor_combo.currentData()
+                    diagnosis_id = diagnosis_combo.currentData()
+                    date = date_input.date()
+                    if selected_time[0] is None:
+                        QMessageBox.warning(dialog, "Ошибка", "Выберите время из таблицы")
+                        return
+                    starttime = selected_time[0].toString("HH:mm:ss")
+                    endtime = selected_time[0].addSecs(1800).toString("HH:mm:ss")
+                    status = status_combo.currentText()
+                    price = price_input.text().strip()
+
+                    current_date = QDate.currentDate()
+                    current_time = QTime.currentTime()
+                    appointment_datetime = QDateTime(date, selected_time[0])
+                    current_datetime = QDateTime(current_date, current_time)
+
+                    if appointment_datetime < current_datetime:
+                        QMessageBox.warning(dialog, "Ошибка", "Нельзя изменить прием на прошедшую дату или время")
+                        return
+
+                    if not all([patient_id, medical_card_id, doctor_id, date, starttime, price]):
+                        QMessageBox.warning(dialog, "Ошибка",
+                                            "Заполните все обязательные поля, включая врача для установки цены")
+                        return
+
+                    self.cursor.execute("""
+                        SELECT COUNT(*) 
+                        FROM appointment 
+                        WHERE doctorid = %s 
+                        AND appointmentdate = %s 
+                        AND appointmentid != %s
+                        AND (
+                            (starttime <= %s AND endtime > %s) OR
+                            (starttime < %s AND endtime >= %s) OR
+                            (starttime >= %s AND endtime <= %s)
+                        )
+                    """, (doctor_id, date.toString("yyyy-MM-dd"), appointment_id, starttime, starttime, endtime, endtime, starttime, endtime))
+                    overlap_count = self.cursor.fetchone()[0]
+                    if overlap_count > 0:
+                        QMessageBox.warning(dialog, "Ошибка", "В это время врач уже занят")
+                        return
+
+                    price_value = float(price) if price else None
+
+                    self.cursor.execute(
+                        """UPDATE appointment SET 
+                        patientid = %s,
+                        medicalcardid = %s,
+                        doctorid = %s,
+                        diagnosisid = %s,
+                        appointmentdate = %s,
+                        starttime = %s,
+                        endtime = %s,
+                        status = %s,
+                        appointmentprice = %s
+                        WHERE appointmentid = %s""",
+                        (patient_id, medical_card_id, doctor_id, diagnosis_id, date.toString("yyyy-MM-dd"), starttime, endtime,
+                         status or None, price_value, appointment_id))
+
+                    self.conn.commit()
+
+                    patient_name = self.patient_dict.get(patient_id, "Неизвестный пациент")
+                    doctor_name = self.doctor_dict.get(doctor_id, "Неизвестный врач")
+                    diagnosis_name = self.diagnosis_dict.get(diagnosis_id, "Неизвестный диагноз")
+                    formatted_date = date_input.date().toString("dd.MM.yyyy")
+                    formatted_starttime = selected_time[0].toString("HH:mm")
+                    formatted_endtime = selected_time[0].addSecs(1800).toString("HH:mm")
+                    formatted_price = f"{price_value:.2f}" if price_value is not None else ""
+
+                    self.table.item(row, 1).setText(patient_name)
+                    self.table.item(row, 2).setText(str(medical_card_id))
+                    self.table.item(row, 3).setText(doctor_name)
+                    self.table.item(row, 4).setText(formatted_date)
+                    self.table.item(row, 5).setText(formatted_starttime)
+                    self.table.item(row, 6).setText(formatted_endtime)
+                    self.table.item(row, 7).setText(status or "")
+                    self.table.item(row, 8).setText(diagnosis_name or "")
+                    self.table.item(row, 8).setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                    self.table.item(row, 9).setText(formatted_price)
+
+                    self.table.resizeRowToContents(row)
+
+                    dialog.close()
+                    logging.debug("Прием успешно обновлен")
+                except Exception as e:
+                    self.conn.rollback()
+                    logging.error(f"Ошибка при обновлении приема: {str(e)}")
+                    QMessageBox.critical(dialog, "Ошибка", f"Не удалось обновить данные приема:\n{str(e)}")
+
+            ok_btn.clicked.connect(update_appointment)
+            cancel_btn.clicked.connect(dialog.close)
+
+            update_time_table()
+
+            dialog.exec()
+        except Exception as e:
+            logging.error(f"Ошибка в диалоге редактирования: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Ошибка в диалоге редактирования: {str(e)}")
 
     def generate_pdf(self):
         logging.debug("Генерация PDF-файла")
@@ -814,567 +1429,6 @@ class AppointmentsApp(QMainWindow):
                 "Ошибка загрузки",
                 f"Не удалось загрузить данные из базы:\n{str(e)}"
             )
-
-    def show_add_dialog(self):
-        logging.debug("Открытие диалога добавления приема")
-        try:
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Добавить прием")
-            dialog.setFixedSize(500, 700)  # Increased height from 600 to 700
-
-            layout = QFormLayout(dialog)
-            layout.setContentsMargins(20, 20, 20, 20)
-            layout.setSpacing(15)
-
-            patient_combo = QComboBox()
-            patient_combo.addItem("Не выбрано", None)
-            for patient in self.patients:
-                patient_combo.addItem(patient[1], patient[0])
-
-            medical_card_combo = QComboBox()
-            medical_card_combo.addItem("Не выбрано", None)
-            for card_id, in self.medical_cards:
-                medical_card_combo.addItem(str(card_id), card_id)
-            medical_card_combo.setEnabled(False)
-
-            def update_medical_card():
-                selected_patient_id = patient_combo.currentData()
-                medical_card_combo.setCurrentIndex(0)
-                if selected_patient_id:
-                    for patient in self.patients:
-                        if patient[0] == selected_patient_id:
-                            medical_card_id = patient[2]
-                            for i in range(medical_card_combo.count()):
-                                if medical_card_combo.itemData(i) == medical_card_id:
-                                    medical_card_combo.setCurrentIndex(i)
-                                    break
-                            break
-
-            patient_combo.currentIndexChanged.connect(update_medical_card)
-
-            doctor_combo = QComboBox()
-            doctor_combo.addItem("Не выбрано", None)
-            for doctor in self.doctors:
-                doctor_combo.addItem(doctor[1], doctor[0])
-
-            diagnosis_combo = QComboBox()
-            diagnosis_combo.addItem("Не выбрано", None)
-            for diagnosis in self.diagnoses:
-                diagnosis_combo.addItem(diagnosis[1], diagnosis[0])
-
-            date_input = QDateEdit()
-            date_input.setDisplayFormat("dd.MM.yyyy")
-            date_input.setDate(QDate.currentDate())
-            date_input.setCalendarPopup(True)
-
-            time_table = QTableWidget()
-            time_table.setColumnCount(1)
-            time_table.setHorizontalHeaderLabels(["Время"])
-            time_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-            time_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-            time_table.horizontalHeader().setStretchLastSection(True)
-            time_table.verticalHeader().setVisible(False)
-            time_table.setFixedHeight(150)  # Reduced height from 200 to 150
-
-            selected_time = [None]
-
-            def update_time_table():
-                try:
-                    start_hour = 8
-                    end_hour = 16
-                    slots_per_hour = 2
-                    time_slots = []
-                    for hour in range(start_hour, end_hour):
-                        for minute in range(0, 60, 30):
-                            time = QTime(hour, minute)
-                            time_slots.append(time)
-
-                    time_table.setRowCount(len(time_slots))
-                    for row, slot in enumerate(time_slots):
-                        item = QTableWidgetItem(slot.toString("HH:mm"))
-                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                        item.setBackground(QColor(0, 255, 0))
-                        time_table.setItem(row, 0, item)
-
-                    doctor_id = doctor_combo.currentData()
-                    appointment_date = date_input.date().toString("yyyy-MM-dd")
-                    if not doctor_id or not appointment_date:
-                        return
-
-                    occupied_slots = []
-                    self.cursor.execute("""
-                        SELECT starttime, endtime
-                        FROM appointment
-                        WHERE doctorid = %s AND appointmentdate = %s
-                    """, (doctor_id, appointment_date))
-                    appointments = self.cursor.fetchall()
-
-                    for start_time, end_time in appointments:
-                        start = QTime.fromString(str(start_time), "HH:mm:ss")
-                        end = QTime.fromString(str(end_time), "HH:mm:ss")
-                        current = start
-                        while current < end:
-                            occupied_slots.append(current)
-                            current = current.addSecs(30 * 60)
-
-                    for row, slot in enumerate(time_slots):
-                        item = time_table.item(row, 0)
-                        if slot in occupied_slots:
-                            item.setBackground(QColor(255, 0, 0))
-                            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-                        else:
-                            item.setBackground(QColor(0, 255, 0))
-                            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsSelectable)
-
-                except Exception as e:
-                    logging.error(f"Ошибка при обновлении таблицы времени: {str(e)}")
-                    QMessageBox.warning(dialog, "Ошибка", f"Не удалось загрузить временные слоты: {str(e)}")
-
-            def on_time_table_clicked():
-                selected_items = time_table.selectedItems()
-                if selected_items:
-                    selected_time[0] = QTime.fromString(selected_items[0].text(), "HH:mm")
-
-            doctor_combo.currentIndexChanged.connect(update_time_table)
-            date_input.dateChanged.connect(update_time_table)
-            time_table.itemClicked.connect(on_time_table_clicked)
-
-            status_combo = QComboBox()
-            status_options = ["Завершён", "Отменён", "Назначен"]
-            status_combo.addItems(status_options)
-            status_combo.setCurrentText("Назначен")
-
-            price_input = QLineEdit()
-            price_input.setReadOnly(True)
-            price_input.setPlaceholderText("Цена будет установлена автоматически")
-
-            def update_price():
-                doctor_id = doctor_combo.currentData()
-                price = self.doctor_prices.get(doctor_id, None)
-                price_input.setText(f"{price:.2f}" if price is not None else "")
-
-            doctor_combo.currentIndexChanged.connect(update_price)
-
-            btn_box = QHBoxLayout()
-            btn_box.setSpacing(10)
-
-            ok_btn = QPushButton("Добавить")
-            cancel_btn = QPushButton("Отмена")
-
-            btn_box.addWidget(ok_btn)
-            btn_box.addWidget(cancel_btn)
-
-            layout.addRow("Пациент:", patient_combo)
-            layout.addRow("Номер мед. карты:", medical_card_combo)
-            layout.addRow("Врач:", doctor_combo)
-            layout.addRow("Диагноз:", diagnosis_combo)
-            layout.addRow("Дата:", date_input)
-            layout.addRow("Доступное время:", time_table)
-            layout.addRow("Статус:", status_combo)
-            layout.addRow("Цена:", price_input)
-            layout.addRow(btn_box)
-
-            def add_appointment():
-                try:
-                    patient_id = patient_combo.currentData()
-                    medical_card_id = medical_card_combo.currentData()
-                    doctor_id = doctor_combo.currentData()
-                    diagnosis_id = diagnosis_combo.currentData()
-                    date = date_input.date().toString("yyyy-MM-dd")
-                    if selected_time[0] is None:
-                        QMessageBox.warning(dialog, "Ошибка", "Выберите время из таблицы")
-                        return
-                    starttime = selected_time[0].toString("HH:mm:ss")
-                    endtime = selected_time[0].addSecs(1800).toString("HH:mm:ss")
-                    status = status_combo.currentText()
-                    price = price_input.text().strip()
-
-                    if not all([patient_id, medical_card_id, doctor_id, date, starttime, price]):
-                        QMessageBox.warning(dialog, "Ошибка",
-                                            "Заполните все обязательные поля, включая врача для установки цены")
-                        return
-
-                    self.cursor.execute("""
-                        SELECT COUNT(*) 
-                        FROM appointment 
-                        WHERE doctorid = %s 
-                        AND appointmentdate = %s 
-                        AND (
-                            (starttime <= %s AND endtime > %s) OR
-                            (starttime < %s AND endtime >= %s) OR
-                            (starttime >= %s AND endtime <= %s)
-                        )
-                    """, (doctor_id, date, starttime, starttime, endtime, endtime, starttime, endtime))
-                    overlap_count = self.cursor.fetchone()[0]
-                    if overlap_count > 0:
-                        QMessageBox.warning(dialog, "Ошибка", "В это время врач уже занят")
-                        return
-
-                    price_value = float(price) if price else None
-
-                    self.cursor.execute(
-                        """INSERT INTO appointment 
-                        (patientid, medicalcardid, doctorid, diagnosisid, appointmentdate, 
-                        starttime, endtime, status, appointmentprice) 
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) 
-                        RETURNING appointmentid""",
-                        (patient_id, medical_card_id, doctor_id, diagnosis_id, date, starttime, endtime,
-                         status or None, price_value))
-
-                    new_id = self.cursor.fetchone()[0]
-                    self.conn.commit()
-
-                    row_pos = self.table.rowCount()
-                    self.table.insertRow(row_pos)
-
-                    patient_name = self.patient_dict.get(patient_id, "Неизвестный пациент")
-                    doctor_name = self.doctor_dict.get(doctor_id, "Неизвестный врач")
-                    diagnosis_name = self.diagnosis_dict.get(diagnosis_id, "Неизвестный диагноз")
-
-                    formatted_date = date_input.date().toString("dd.MM.yyyy")
-                    formatted_starttime = selected_time[0].toString("HH:mm")
-                    formatted_endtime = selected_time[0].addSecs(1800).toString("HH:mm")
-                    formatted_price = f"{price_value:.2f}" if price_value is not None else ""
-
-                    columns = [
-                        str(new_id), patient_name, str(medical_card_id), doctor_name,
-                        formatted_date, formatted_starttime, formatted_endtime,
-                        status or "", diagnosis_name, formatted_price
-                    ]
-
-                    for col_idx, value in enumerate(columns):
-                        item = QTableWidgetItem(value)
-                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                        if col_idx == 8:
-                            item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-                        else:
-                            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                        self.table.setItem(row_pos, col_idx, item)
-
-                    self.table.resizeRowToContents(row_pos)
-
-                    dialog.close()
-                    logging.debug("Прием успешно добавлен")
-                except Exception as e:
-                    self.conn.rollback()
-                    logging.error(f"Ошибка при добавлении приема: {str(e)}")
-                    QMessageBox.critical(dialog, "Ошибка", f"Не удалось добавить прием:\n{str(e)}")
-
-            ok_btn.clicked.connect(add_appointment)
-            cancel_btn.clicked.connect(dialog.close)
-
-            update_time_table()
-
-            dialog.exec()
-        except Exception as e:
-            logging.error(f"Ошибка в диалоге добавления: {str(e)}")
-            QMessageBox.critical(self, "Ошибка", f"Ошибка в диалоге добавления: {str(e)}")
-
-    def show_edit_dialog(self):
-        logging.debug("Открытие диалога редактирования приема")
-        try:
-            selected_items = self.table.selectedItems()
-            if not selected_items:
-                QMessageBox.warning(self, "Ошибка", "Выберите прием для редактирования")
-                return
-
-            row = selected_items[0].row()
-            appointment_id = int(self.table.item(row, 0).text())
-
-            current_patient_name = self.table.item(row, 1).text()
-            current_medical_card = self.table.item(row, 2).text()
-            current_doctor_name = self.table.item(row, 3).text()
-            current_date = QDate.fromString(self.table.item(row, 4).text(), "dd.MM.yyyy")
-            current_starttime = QTime.fromString(self.table.item(row, 5).text(), "HH:mm")
-            current_endtime = QTime.fromString(self.table.item(row, 6).text(), "HH:mm")
-            current_status = self.table.item(row, 7).text()
-            current_diagnosis_name = self.table.item(row, 8).text()
-            current_price = self.table.item(row, 9).text()
-
-            current_patient_id = None
-            for patient_id, patient_name in self.patient_dict.items():
-                if patient_name == current_patient_name:
-                    current_patient_id = patient_id
-                    break
-
-            current_doctor_id = None
-            for doctor_id, doctor_name in self.doctor_dict.items():
-                if doctor_name == current_doctor_name:
-                    current_doctor_id = doctor_id
-                    break
-
-            current_diagnosis_id = None
-            for diagnosis_id, diagnosis_name in self.diagnosis_dict.items():
-                if diagnosis_name == current_diagnosis_name:
-                    current_diagnosis_id = diagnosis_id
-                    break
-
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Редактировать прием")
-            dialog.setFixedSize(500, 700)  # Increased height from 600 to 700
-
-            layout = QFormLayout(dialog)
-            layout.setContentsMargins(20, 20, 20, 20)
-            layout.setSpacing(15)
-
-            patient_combo = QComboBox()
-            patient_combo.addItem("Не выбрано", None)
-            current_patient_index = 0
-            for i, patient in enumerate(self.patients):
-                patient_combo.addItem(patient[1], patient[0])
-                if patient[0] == current_patient_id:
-                    current_patient_index = i + 1
-            patient_combo.setCurrentIndex(current_patient_index)
-
-            medical_card_combo = QComboBox()
-            medical_card_combo.addItem("Не выбрано", None)
-            current_card_index = 0
-            for i, (card_id,) in enumerate(self.medical_cards):
-                medical_card_combo.addItem(str(card_id), card_id)
-                if str(card_id) == current_medical_card:
-                    current_card_index = i + 1
-            medical_card_combo.setCurrentIndex(current_card_index)
-            medical_card_combo.setEnabled(False)
-
-            def update_medical_card():
-                selected_patient_id = patient_combo.currentData()
-                medical_card_combo.setCurrentIndex(0)
-                if selected_patient_id:
-                    for patient in self.patients:
-                        if patient[0] == selected_patient_id:
-                            medical_card_id = patient[2]
-                            for i in range(medical_card_combo.count()):
-                                if medical_card_combo.itemData(i) == medical_card_id:
-                                    medical_card_combo.setCurrentIndex(i)
-                                    break
-                            break
-
-            patient_combo.currentIndexChanged.connect(update_medical_card)
-
-            doctor_combo = QComboBox()
-            doctor_combo.addItem("Не выбрано", None)
-            current_doctor_index = 0
-            for i, doctor in enumerate(self.doctors):
-                doctor_combo.addItem(doctor[1], doctor[0])
-                if doctor[0] == current_doctor_id:
-                    current_doctor_index = i + 1
-            doctor_combo.setCurrentIndex(current_doctor_index)
-
-            diagnosis_combo = QComboBox()
-            diagnosis_combo.addItem("Не выбрано", None)
-            current_diagnosis_index = 0
-            for i, diagnosis in enumerate(self.diagnoses):
-                diagnosis_combo.addItem(diagnosis[1], diagnosis[0])
-                if diagnosis[0] == current_diagnosis_id:
-                    current_diagnosis_index = i + 1
-            diagnosis_combo.setCurrentIndex(current_diagnosis_index)
-
-            date_input = QDateEdit(current_date)
-            date_input.setDisplayFormat("dd.MM.yyyy")
-            date_input.setCalendarPopup(True)
-
-            time_table = QTableWidget()
-            time_table.setColumnCount(1)
-            time_table.setHorizontalHeaderLabels(["Время"])
-            time_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-            time_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-            time_table.horizontalHeader().setStretchLastSection(True)
-            time_table.verticalHeader().setVisible(False)
-            time_table.setFixedHeight(150)  # Reduced height from 200 to 150
-
-            selected_time = [current_starttime]
-
-            def update_time_table():
-                try:
-                    start_hour = 8
-                    end_hour = 16
-                    slots_per_hour = 2
-                    time_slots = []
-                    for hour in range(start_hour, end_hour):
-                        for minute in range(0, 60, 30):
-                            time = QTime(hour, minute)
-                            time_slots.append(time)
-
-                    time_table.setRowCount(len(time_slots))
-                    for row, slot in enumerate(time_slots):
-                        item = QTableWidgetItem(slot.toString("HH:mm"))
-                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                        item.setBackground(QColor(0, 255, 0))
-                        time_table.setItem(row, 0, item)
-
-                    doctor_id = doctor_combo.currentData()
-                    appointment_date = date_input.date().toString("yyyy-MM-dd")
-                    if not doctor_id or not appointment_date:
-                        return
-
-                    occupied_slots = []
-                    self.cursor.execute("""
-                        SELECT starttime, endtime
-                        FROM appointment
-                        WHERE doctorid = %s AND appointmentdate = %s AND appointmentid != %s
-                    """, (doctor_id, appointment_date, appointment_id))
-                    appointments = self.cursor.fetchall()
-
-                    for start_time, end_time in appointments:
-                        start = QTime.fromString(str(start_time), "HH:mm:ss")
-                        end = QTime.fromString(str(end_time), "HH:mm:ss")
-                        current = start
-                        while current < end:
-                            occupied_slots.append(current)
-                            current = current.addSecs(30 * 60)
-
-                    for row, slot in enumerate(time_slots):
-                        item = time_table.item(row, 0)
-                        if slot in occupied_slots:
-                            item.setBackground(QColor(255, 0, 0))
-                            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-                        else:
-                            item.setBackground(QColor(0, 255, 0))
-                            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsSelectable)
-
-                        if slot == current_starttime:
-                            time_table.setCurrentCell(row, 0)
-
-                except Exception as e:
-                    logging.error(f"Ошибка при обновлении таблицы времени: {str(e)}")
-                    QMessageBox.warning(dialog, "Ошибка", f"Не удалось загрузить временные слоты: {str(e)}")
-
-            def on_time_table_clicked():
-                selected_items = time_table.selectedItems()
-                if selected_items:
-                    selected_time[0] = QTime.fromString(selected_items[0].text(), "HH:mm")
-
-            doctor_combo.currentIndexChanged.connect(update_time_table)
-            date_input.dateChanged.connect(update_time_table)
-            time_table.itemClicked.connect(on_time_table_clicked)
-
-            status_combo = QComboBox()
-            status_options = ["Завершён", "Отменён", "Назначен"]
-            status_combo.addItems(status_options)
-            status_combo.setCurrentText(current_status if current_status in status_options else "Назначен")
-
-            price_input = QLineEdit(current_price)
-            price_input.setReadOnly(True)
-
-            def update_price():
-                doctor_id = doctor_combo.currentData()
-                price = self.doctor_prices.get(doctor_id, None)
-                price_input.setText(f"{price:.2f}" if price is not None else "")
-
-            doctor_combo.currentIndexChanged.connect(update_price)
-
-            btn_box = QHBoxLayout()
-            btn_box.setSpacing(10)
-
-            ok_btn = QPushButton("Сохранить")
-            cancel_btn = QPushButton("Отмена")
-
-            btn_box.addWidget(ok_btn)
-            btn_box.addWidget(cancel_btn)
-
-            layout.addRow("Пациент:", patient_combo)
-            layout.addRow("Номер мед. карты:", medical_card_combo)
-            layout.addRow("Врач:", doctor_combo)
-            layout.addRow("Диагноз:", diagnosis_combo)
-            layout.addRow("Дата:", date_input)
-            layout.addRow("Доступное время:", time_table)
-            layout.addRow("Статус:", status_combo)
-            layout.addRow("Цена:", price_input)
-            layout.addRow(btn_box)
-
-            def update_appointment():
-                try:
-                    patient_id = patient_combo.currentData()
-                    medical_card_id = medical_card_combo.currentData()
-                    doctor_id = doctor_combo.currentData()
-                    diagnosis_id = diagnosis_combo.currentData()
-                    date = date_input.date().toString("yyyy-MM-dd")
-                    if selected_time[0] is None:
-                        QMessageBox.warning(dialog, "Ошибка", "Выберите время из таблицы")
-                        return
-                    starttime = selected_time[0].toString("HH:mm:ss")
-                    endtime = selected_time[0].addSecs(1800).toString("HH:mm:ss")
-                    status = status_combo.currentText()
-                    price = price_input.text().strip()
-
-                    if not all([patient_id, medical_card_id, doctor_id, date, starttime, price]):
-                        QMessageBox.warning(dialog, "Ошибка",
-                                            "Заполните все обязательные поля, включая врача для установки цены")
-                        return
-
-                    self.cursor.execute("""
-                        SELECT COUNT(*) 
-                        FROM appointment 
-                        WHERE doctorid = %s 
-                        AND appointmentdate = %s 
-                        AND appointmentid != %s
-                        AND (
-                            (starttime <= %s AND endtime > %s) OR
-                            (starttime < %s AND endtime >= %s) OR
-                            (starttime >= %s AND endtime <= %s)
-                        )
-                    """, (doctor_id, date, appointment_id, starttime, starttime, endtime, endtime, starttime, endtime))
-                    overlap_count = self.cursor.fetchone()[0]
-                    if overlap_count > 0:
-                        QMessageBox.warning(dialog, "Ошибка", "В это время врач уже занят")
-                        return
-
-                    price_value = float(price) if price else None
-
-                    self.cursor.execute(
-                        """UPDATE appointment SET 
-                        patientid = %s,
-                        medicalcardid = %s,
-                        doctorid = %s,
-                        diagnosisid = %s,
-                        appointmentdate = %s,
-                        starttime = %s,
-                        endtime = %s,
-                        status = %s,
-                        appointmentprice = %s
-                        WHERE appointmentid = %s""",
-                        (patient_id, medical_card_id, doctor_id, diagnosis_id, date, starttime, endtime,
-                         status or None, price_value, appointment_id))
-
-                    self.conn.commit()
-
-                    patient_name = self.patient_dict.get(patient_id, "Неизвестный пациент")
-                    doctor_name = self.doctor_dict.get(doctor_id, "Неизвестный врач")
-                    diagnosis_name = self.diagnosis_dict.get(diagnosis_id, "Неизвестный диагноз")
-                    formatted_date = date_input.date().toString("dd.MM.yyyy")
-                    formatted_starttime = selected_time[0].toString("HH:mm")
-                    formatted_endtime = selected_time[0].addSecs(1800).toString("HH:mm")
-                    formatted_price = f"{price_value:.2f}" if price_value is not None else ""
-
-                    self.table.item(row, 1).setText(patient_name)
-                    self.table.item(row, 2).setText(str(medical_card_id))
-                    self.table.item(row, 3).setText(doctor_name)
-                    self.table.item(row, 4).setText(formatted_date)
-                    self.table.item(row, 5).setText(formatted_starttime)
-                    self.table.item(row, 6).setText(formatted_endtime)
-                    self.table.item(row, 7).setText(status or "")
-                    self.table.item(row, 8).setText(diagnosis_name or "")
-                    self.table.item(row, 8).setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-                    self.table.item(row, 9).setText(formatted_price)
-
-                    self.table.resizeRowToContents(row)
-
-                    dialog.close()
-                    logging.debug("Прием успешно обновлен")
-                except Exception as e:
-                    self.conn.rollback()
-                    logging.error(f"Ошибка при обновлении приема: {str(e)}")
-                    QMessageBox.critical(dialog, "Ошибка", f"Не удалось обновить данные приема:\n{str(e)}")
-
-            ok_btn.clicked.connect(update_appointment)
-            cancel_btn.clicked.connect(dialog.close)
-
-            update_time_table()
-
-            dialog.exec()
-        except Exception as e:
-            logging.error(f"Ошибка в диалоге редактирования: {str(e)}")
-            QMessageBox.critical(self, "Ошибка", f"Ошибка в диалоге редактирования: {str(e)}")
 
     def delete_appointment(self):
         logging.debug("Удаление приема")

@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QDateEdit, QHBoxLayout, QTableWidget,
     QTableWidgetItem, QLineEdit
 )
-from PyQt6.QtCore import Qt, QDate, QTime
+from PyQt6.QtCore import Qt, QDate, QTime, QDateTime
 from PyQt6.QtGui import QColor, QPalette, QIcon
 from MedicalCard import MedicalCardApp
 
@@ -265,6 +265,7 @@ class ClientApp(QMainWindow):
         date_input.setDate(QDate.currentDate())
         date_input.setCalendarPopup(True)
         date_input.setDisplayFormat("dd.MM.yyyy")
+        date_input.setMinimumDate(QDate.currentDate())  # Prevent selecting past dates
 
         time_table = QTableWidget()
         time_table.setColumnCount(1)
@@ -288,6 +289,10 @@ class ClientApp(QMainWindow):
                 end_hour = 16
                 slots_per_hour = 2  # 30-minute intervals
                 time_slots = []
+                current_date = QDate.currentDate()
+                selected_date = date_input.date()
+                now = QTime.currentTime()
+
                 for hour in range(start_hour, end_hour):
                     for minute in range(0, 60, 30):
                         time = QTime(hour, minute)
@@ -298,6 +303,9 @@ class ClientApp(QMainWindow):
                     item = QTableWidgetItem(slot.toString("HH:mm"))
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     item.setBackground(QColor(0, 255, 0))  # Green by default (free)
+                    if selected_date == current_date and slot < now:
+                        item.setBackground(QColor(128, 128, 128))  # Gray for past times
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
                     time_table.setItem(row, 0, item)
 
                 doctor_id = doctor_combo.currentData()
@@ -326,6 +334,9 @@ class ClientApp(QMainWindow):
                     item = time_table.item(row, 0)
                     if slot in occupied_slots:
                         item.setBackground(QColor(255, 0, 0))  # Red for occupied
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                    elif selected_date == current_date and slot < now:
+                        item.setBackground(QColor(128, 128, 128))  # Gray for past times
                         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
                     else:
                         item.setBackground(QColor(0, 255, 0))  # Green for free
@@ -368,7 +379,8 @@ class ClientApp(QMainWindow):
             try:
                 doctor_id = doctor_combo.currentData()
                 medical_card_id = medical_card_combo.currentData()
-                appointment_date = date_input.date().toString("yyyy-MM-dd")
+                appointment_date = date_input.date()
+                appointment_date_str = appointment_date.toString("yyyy-MM-dd")
                 if selected_time[0] is None:
                     QMessageBox.warning(dialog, "Ошибка", "Выберите время из таблицы")
                     return
@@ -376,7 +388,17 @@ class ClientApp(QMainWindow):
                 end_time = selected_time[0].addSecs(1800).toString("HH:mm:ss")  # 30 minutes later
                 price = price_input.text().strip()
 
-                if not all([doctor_id, medical_card_id, appointment_date, start_time, price]):
+                # Validate that the appointment date and time are not in the past
+                current_date = QDate.currentDate()
+                current_time = QTime.currentTime()
+                appointment_datetime = QDateTime(appointment_date, selected_time[0])
+                current_datetime = QDateTime(current_date, current_time)
+
+                if appointment_datetime < current_datetime:
+                    QMessageBox.warning(dialog, "Ошибка", "Нельзя записаться на прошедшую дату или время")
+                    return
+
+                if not all([doctor_id, medical_card_id, appointment_date_str, start_time, price]):
                     QMessageBox.warning(dialog, "Ошибка", "Заполните все обязательные поля, включая врача для установки цены")
                     return
 
@@ -391,7 +413,7 @@ class ClientApp(QMainWindow):
                         (starttime < %s AND endtime >= %s) OR
                         (starttime >= %s AND endtime <= %s)
                     )
-                """, (doctor_id, appointment_date, start_time, start_time, end_time, end_time, start_time, end_time))
+                """, (doctor_id, appointment_date_str, start_time, start_time, end_time, end_time, start_time, end_time))
                 overlap_count = self.cursor.fetchone()[0]
                 if overlap_count > 0:
                     QMessageBox.warning(dialog, "Ошибка", "В это время врач уже занят")
@@ -403,7 +425,7 @@ class ClientApp(QMainWindow):
                     """INSERT INTO appointment 
                     (patientid, medicalcardid, doctorid, appointmentdate, starttime, endtime, status, appointmentprice) 
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (self.patient_id, medical_card_id, doctor_id, appointment_date, start_time, end_time, "В процессе", price_value)
+                    (self.patient_id, medical_card_id, doctor_id, appointment_date_str, start_time, end_time, "В процессе", price_value)
                 )
                 self.conn.commit()
                 QMessageBox.information(dialog, "Успех", "Вы успешно записались на прием")
