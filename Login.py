@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QColor, QPalette, QIcon
 import psycopg2
+import uuid
 
 from Admin import MainApp as AdminApp
 from ClientApp import ClientApp
@@ -15,6 +16,142 @@ from EmployeeApp import MainApp as EmployeeApp
 
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+class ChangePasswordDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Смена пароля")
+        self.setFixedSize(400, 300)
+        self.setWindowIcon(QIcon("icon.jpg"))
+
+        # Цветовая схема
+        self.med_blue = QColor(0, 109, 176)
+        self.med_light = QColor(229, 243, 255)
+        self.med_white = QColor(255, 255, 255)
+
+        # Стили
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {self.med_light.name()};
+            }}
+            QLineEdit {{
+                border: 1px solid #006DB0;
+                border-radius: 4px;
+                padding: 8px;
+                font-size: 14px;
+                min-width: 200px;
+                background-color: white;
+            }}
+            QPushButton {{
+                background-color: #006DB0;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px;
+                font-size: 14px;
+            }}
+            QPushButton:hover {{
+                background-color: #005A9C;
+            }}
+            QPushButton:pressed {{
+                background-color: #004080;
+            }}
+            QLabel {{
+                font-size: 14px;
+                color: #006DB0;
+            }}
+        """)
+
+        # Основной layout
+        layout = QFormLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+
+        # Заголовок
+        title_label = QLabel("Смена пароля")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+        layout.addRow(title_label)
+
+        # Поля ввода
+        self.old_password_input = QLineEdit()
+        self.old_password_input.setPlaceholderText("Введите старый пароль")
+        self.old_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.old_password_input.setMaxLength(50)
+
+        self.new_password_input = QLineEdit()
+        self.new_password_input.setPlaceholderText("Введите новый пароль")
+        self.new_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.new_password_input.setMaxLength(50)
+
+        self.confirm_password_input = QLineEdit()
+        self.confirm_password_input.setPlaceholderText("Подтвердите новый пароль")
+        self.confirm_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.confirm_password_input.setMaxLength(50)
+
+        # Кнопки
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("Сохранить")
+        cancel_btn = QPushButton("Отмена")
+        ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+
+        # Добавление в форму
+        layout.addRow("Старый пароль:", self.old_password_input)
+        layout.addRow("Новый пароль:", self.new_password_input)
+        layout.addRow("Подтверждение:", self.confirm_password_input)
+        layout.addRow(btn_layout)
+
+        # Подключение сигналов
+        ok_btn.clicked.connect(self.change_password)
+        cancel_btn.clicked.connect(self.reject)
+
+    def change_password(self):
+        old_password = self.old_password_input.text().strip()
+        new_password = self.new_password_input.text().strip()
+        confirm_password = self.confirm_password_input.text().strip()
+
+        # Валидация
+        if not all([old_password, new_password, confirm_password]):
+            QMessageBox.warning(self, "Ошибка", "Заполните все поля")
+            return
+
+        if new_password != confirm_password:
+            QMessageBox.warning(self, "Ошибка", "Новый пароль и подтверждение не совпадают")
+            return
+
+        if len(new_password) < 6:
+            QMessageBox.warning(self, "Ошибка", "Новый пароль должен содержать не менее 6 символов")
+            return
+
+        try:
+            cursor = self.parent().cursor
+            conn = self.parent().conn
+
+            # Проверка старого пароля
+            cursor.execute(
+                "SELECT login FROM users WHERE login = %s AND password = %s",
+                (self.parent().login_input.text().strip(), old_password)
+            )
+            if not cursor.fetchone():
+                QMessageBox.warning(self, "Ошибка", "Неверный старый пароль")
+                return
+
+            # Обновление пароля
+            cursor.execute(
+                "UPDATE users SET password = %s WHERE login = %s",
+                (new_password, self.parent().login_input.text().strip())
+            )
+            conn.commit()
+            QMessageBox.information(self, "Успех", "Пароль успешно изменен!")
+            self.accept()
+
+        except Exception as e:
+            conn.rollback()
+            logging.error(f"Ошибка при смене пароля: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сменить пароль:\n{str(e)}")
 
 class MedicalCardDialog(QDialog):
     def __init__(self, parent=None, patient_id=None):
@@ -459,7 +596,7 @@ class LoginWindow(QMainWindow):
         logging.debug("Инициализация LoginWindow")
         self.failed_attempts = {}
         self.setWindowTitle("Медицинская информационная система - Авторизация")
-        self.setFixedSize(400, 300)
+        self.setFixedSize(400, 350)  # Увеличил размер окна для новой кнопки
         self.setWindowIcon(QIcon("icon.jpg"))
 
         # Цветовая схема
@@ -586,8 +723,30 @@ class LoginWindow(QMainWindow):
         register_button.setCursor(Qt.CursorShape.PointingHandCursor)
         register_button.clicked.connect(self.open_register_window)
 
+        change_password_button = QPushButton("Сменить пароль")
+        change_password_button.setStyleSheet("""
+            QPushButton {
+                background-color: #006DB0;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px;
+                font-size: 14px;
+                margin-top: 15px;
+            }
+            QPushButton:hover {
+                background-color: #005A9C;
+            }
+            QPushButton:pressed {
+                background-color: #004080;
+            }
+        """)
+        change_password_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        change_password_button.clicked.connect(self.open_change_password_window)
+
         btn_layout.addWidget(login_button)
         btn_layout.addWidget(register_button)
+        btn_layout.addWidget(change_password_button)
         main_layout.addLayout(btn_layout)
 
         # Инициализация подключения к базе данных
@@ -626,6 +785,18 @@ class LoginWindow(QMainWindow):
             self.password_input.clear()
             self.login_input.setFocus()
         logging.debug("Окно регистрации закрыто")
+
+    def open_change_password_window(self):
+        logging.debug("Открытие окна смены пароля")
+        if not self.login_input.text().strip():
+            QMessageBox.warning(self, "Ошибка", "Введите логин перед сменой пароля")
+            return
+        change_password_dialog = ChangePasswordDialog(self)
+        if change_password_dialog.exec():
+            self.login_input.clear()
+            self.password_input.clear()
+            self.login_input.setFocus()
+        logging.debug("Окно смены пароля закрыто")
 
     def authenticate(self):
         login = self.login_input.text().strip()
