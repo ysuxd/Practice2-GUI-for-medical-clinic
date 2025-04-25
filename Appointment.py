@@ -307,9 +307,10 @@ class AppointmentsApp(QMainWindow):
             self.refresh_btn = QPushButton("Обновить")
             self.pdf_btn = QPushButton("Создать PDF")
             self.schedule_btn = QPushButton("Записаться на прием")
+            self.cancel_btn = QPushButton("Отменить прием")  # New button for canceling
 
             # Set cursor for all buttons
-            for btn in [self.add_btn, self.edit_btn, self.delete_btn, self.refresh_btn, self.pdf_btn, self.schedule_btn]:
+            for btn in [self.add_btn, self.edit_btn, self.delete_btn, self.refresh_btn, self.pdf_btn, self.schedule_btn, self.cancel_btn]:
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
             # Connect signals for admin buttons
@@ -355,6 +356,13 @@ class AppointmentsApp(QMainWindow):
                 logging.error(f"Ошибка подключения schedule_btn.clicked: {str(e)}")
                 QMessageBox.critical(self, "Ошибка", f"Ошибка подключения сигнала schedule_btn: {str(e)}")
 
+            try:
+                self.cancel_btn.clicked.connect(self.cancel_appointment)
+                logging.debug("Сигнал cancel_btn.clicked подключен")
+            except Exception as e:
+                logging.error(f"Ошибка подключения cancel_btn.clicked: {str(e)}")
+                QMessageBox.critical(self, "Ошибка", f"Ошибка подключения сигнала cancel_btn: {str(e)}")
+
             # Conditionally add buttons based on role
             if self.role != "Пользователь":
                 btn_layout.addWidget(self.add_btn)
@@ -364,6 +372,7 @@ class AppointmentsApp(QMainWindow):
                 btn_layout.addWidget(self.pdf_btn)
             else:
                 btn_layout.addWidget(self.schedule_btn)
+                btn_layout.addWidget(self.cancel_btn)  # Add cancel button for users
 
             self.table = QTableWidget()
             self.table.setColumnCount(10)
@@ -399,6 +408,45 @@ class AppointmentsApp(QMainWindow):
         except Exception as e:
             logging.error(f"Ошибка при настройке интерфейса: {str(e)}")
             QMessageBox.critical(self, "Ошибка", f"Ошибка при настройке интерфейса: {str(e)}")
+
+    def cancel_appointment(self):
+        logging.debug("Отмена приема")
+        try:
+            selected_items = self.table.selectedItems()
+            if not selected_items:
+                QMessageBox.warning(self, "Ошибка", "Выберите прием для отмены")
+                return
+
+            row = selected_items[0].row()
+            appointment_id = int(self.table.item(row, 0).text())
+            appointment_date = self.table.item(row, 4).text()
+            current_status = self.table.item(row, 7).text()
+
+            if current_status == "Отменён":
+                QMessageBox.warning(self, "Ошибка", "Этот прием уже отменен")
+                return
+
+            if current_status == "Завершён":
+                QMessageBox.warning(self, "Ошибка", "Нельзя отменить завершенный прием")
+                return
+
+            reply = QMessageBox.question(
+                self, "Подтверждение",
+                f"Вы уверены, что хотите отменить прием от {appointment_date}?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+
+            if reply == QMessageBox.StandardButton.Yes:
+                self.cursor.execute(
+                    "UPDATE appointment SET status = %s WHERE appointmentid = %s",
+                    ("Отменён", appointment_id))
+                self.conn.commit()
+                self.table.item(row, 7).setText("Отменён")
+                logging.debug("Прием успешно отменен")
+                QMessageBox.information(self, "Успех", "Прием успешно отменен")
+        except Exception as e:
+            self.conn.rollback()
+            logging.error(f"Ошибка при отмене приема: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Не удалось отменить прием:\n{str(e)}")
 
     def show_schedule_dialog(self):
         logging.debug("Открытие диалога записи на прием")
@@ -495,7 +543,7 @@ class AppointmentsApp(QMainWindow):
                 self.cursor.execute("""
                     SELECT starttime, endtime
                     FROM appointment
-                    WHERE doctorid = %s AND appointmentdate = %s
+                    WHERE doctorid = %s AND appointmentdate = %s AND status != 'Отменён'
                 """, (doctor_id, appointment_date))
                 appointments = self.cursor.fetchall()
 
@@ -582,6 +630,7 @@ class AppointmentsApp(QMainWindow):
                     FROM appointment 
                     WHERE doctorid = %s 
                     AND appointmentdate = %s 
+                    AND status != 'Отменён'
                     AND (
                         (starttime <= %s AND endtime > %s) OR
                         (starttime < %s AND endtime >= %s) OR
@@ -599,7 +648,7 @@ class AppointmentsApp(QMainWindow):
                     """INSERT INTO appointment 
                     (patientid, medicalcardid, doctorid, appointmentdate, starttime, endtime, status, appointmentprice) 
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (self.patient_id, medical_card_id, doctor_id, appointment_date.toString("yyyy-MM-dd"), start_time, end_time, "В процессе", price_value)
+                    (self.patient_id, medical_card_id, doctor_id, appointment_date.toString("yyyy-MM-dd"), start_time, end_time, "Назначен", price_value)
                 )
                 self.conn.commit()
                 QMessageBox.information(dialog, "Успех", "Вы успешно записались на прием")
@@ -715,7 +764,7 @@ class AppointmentsApp(QMainWindow):
                     self.cursor.execute("""
                         SELECT starttime, endtime
                         FROM appointment
-                        WHERE doctorid = %s AND appointmentdate = %s
+                        WHERE doctorid = %s AND appointmentdate = %s AND status != 'Отменён'
                     """, (doctor_id, appointment_date))
                     appointments = self.cursor.fetchall()
 
@@ -821,6 +870,7 @@ class AppointmentsApp(QMainWindow):
                         FROM appointment 
                         WHERE doctorid = %s 
                         AND appointmentdate = %s 
+                        AND status != 'Отменён'
                         AND (
                             (starttime <= %s AND endtime > %s) OR
                             (starttime < %s AND endtime >= %s) OR
@@ -1041,7 +1091,7 @@ class AppointmentsApp(QMainWindow):
                     self.cursor.execute("""
                         SELECT starttime, endtime
                         FROM appointment
-                        WHERE doctorid = %s AND appointmentdate = %s AND appointmentid != %s
+                        WHERE doctorid = %s AND appointmentdate = %s AND appointmentid != %s AND status != 'Отменён'
                     """, (doctor_id, appointment_date, appointment_id))
                     appointments = self.cursor.fetchall()
 
@@ -1150,6 +1200,7 @@ class AppointmentsApp(QMainWindow):
                         WHERE doctorid = %s 
                         AND appointmentdate = %s 
                         AND appointmentid != %s
+                        AND status != 'Отменён'
                         AND (
                             (starttime <= %s AND endtime > %s) OR
                             (starttime < %s AND endtime >= %s) OR
@@ -1281,8 +1332,6 @@ class AppointmentsApp(QMainWindow):
 
                 date_time = f"{date}\n{start_time}-{end_time}"
                 medical_card_patient = f"{patient}\n№ мед. карты {medical_card}"
-                if status == "Назначен":
-                    status = "Назначен"
 
                 row_data = [medical_card_patient, doctor, date_time, diagnosis, status, price]
 
