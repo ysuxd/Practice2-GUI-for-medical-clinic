@@ -1,6 +1,7 @@
 import sys
 import psycopg2
 import logging
+import os
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QLabel, QPushButton, QMessageBox, QDialog, QFormLayout,
@@ -12,7 +13,14 @@ from PyQt6.QtGui import QColor, QPalette, QIcon
 from MedicalCard import MedicalCardApp
 
 # Настройка логирования
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', filename='client_app.log')
+log_dir = 'logs'
+log_file = os.path.join(log_dir, 'ClientApp.log')
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename=log_file
+)
 
 class ClientApp(QMainWindow):
     def __init__(self, user_id=None, role=None):
