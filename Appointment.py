@@ -1,6 +1,7 @@
 import sys
 import psycopg2
 import logging
+import os
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QPushButton, QTableWidget,
@@ -18,10 +19,13 @@ from reportlab.pdfbase.ttfonts import TTFont
 from datetime import datetime
 
 # Настройка логирования
+log_dir = 'logs'
+log_file = os.path.join(log_dir, 'Appointment.log')
+
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    filename='Appointment.log'
+    filename=log_file
 )
 
 class AppointmentsApp(QMainWindow):
