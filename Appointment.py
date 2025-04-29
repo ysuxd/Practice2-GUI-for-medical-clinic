@@ -28,10 +28,12 @@ logging.basicConfig(
     filename=log_file
 )
 
+
 class AppointmentsApp(QMainWindow):
     def __init__(self, medical_card_id=None, role=None, user_id=None):
         super().__init__()
-        logging.debug(f"Инициализация AppointmentsApp с medical_card_id={medical_card_id}, role={role}, user_id={user_id}")
+        logging.debug(
+            f"Инициализация AppointmentsApp с medical_card_id={medical_card_id}, role={role}, user_id={user_id}")
         self.medical_card_id = medical_card_id
         self.role = role
         self.user_id = user_id
@@ -121,8 +123,7 @@ class AppointmentsApp(QMainWindow):
             self.connect_to_db()
             if self.role == "Пользователь" and self.medical_card_id is not None:
                 self.load_patient_id()
-            logging.debug("Вызов setup_ui")
-            self.setup_ui()
+            # Load data before setting up the UI
             logging.debug("Вызов load_patients")
             self.load_patients()
             logging.debug("Вызов load_medical_cards")
@@ -133,6 +134,10 @@ class AppointmentsApp(QMainWindow):
             self.load_doctor_prices()
             logging.debug("Вызов load_diagnoses")
             self.load_diagnoses()
+            # Now set up the UI
+            logging.debug("Вызов setup_ui")
+            self.setup_ui()
+            # Load table data after UI is set up
             logging.debug("Вызов load_data")
             self.load_data()
             logging.debug("Инициализация AppointmentsApp завершена")
@@ -218,7 +223,8 @@ class AppointmentsApp(QMainWindow):
             if self.medical_card_id is None:
                 self.cursor.execute("SELECT medicalcardid FROM medicalcard ORDER BY medicalcardid")
             else:
-                self.cursor.execute("SELECT medicalcardid FROM medicalcard WHERE medicalcardid = %s", (self.medical_card_id,))
+                self.cursor.execute("SELECT medicalcardid FROM medicalcard WHERE medicalcardid = %s",
+                                    (self.medical_card_id,))
             self.medical_cards = self.cursor.fetchall()
             logging.debug(f"Загружено {len(self.medical_cards)} медицинских карт")
         except Exception as e:
@@ -301,6 +307,47 @@ class AppointmentsApp(QMainWindow):
             """)
             layout.addWidget(title_label)
 
+            # Search layout
+            search_layout = QHBoxLayout()
+            search_layout.setSpacing(10)
+
+            self.search_doctor_combo = QComboBox()
+            self.search_doctor_combo.addItem("Все врачи", None)
+            for doctor_id, doctor_name in self.doctors:
+                self.search_doctor_combo.addItem(doctor_name, doctor_id)
+
+            self.search_date_start_input = QDateEdit()
+            self.search_date_start_input.setDate(QDate.currentDate())
+            self.search_date_start_input.setCalendarPopup(True)
+            self.search_date_start_input.setDisplayFormat("dd.MM.yyyy")
+            self.search_date_start_input.setMinimumDate(QDate(2000, 1, 1))
+
+            self.search_date_end_input = QDateEdit()
+            self.search_date_end_input.setDate(QDate.currentDate())
+            self.search_date_end_input.setCalendarPopup(True)
+            self.search_date_end_input.setDisplayFormat("dd.MM.yyyy")
+            self.search_date_end_input.setMinimumDate(QDate(2000, 1, 1))
+
+            self.search_btn = QPushButton("Поиск")
+            self.search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.search_btn.clicked.connect(self.search_appointments)
+
+            self.clear_search_btn = QPushButton("Сбросить")
+            self.clear_search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.clear_search_btn.clicked.connect(self.clear_search)
+
+            search_layout.addWidget(QLabel("Врач:"))
+            search_layout.addWidget(self.search_doctor_combo)
+            search_layout.addWidget(QLabel("Дата с:"))
+            search_layout.addWidget(self.search_date_start_input)
+            search_layout.addWidget(QLabel("по:"))
+            search_layout.addWidget(self.search_date_end_input)
+            search_layout.addWidget(self.search_btn)
+            search_layout.addWidget(self.clear_search_btn)
+            search_layout.addStretch()
+
+            layout.addLayout(search_layout)
+
             btn_layout = QHBoxLayout()
             btn_layout.setSpacing(10)
 
@@ -311,10 +358,11 @@ class AppointmentsApp(QMainWindow):
             self.refresh_btn = QPushButton("Обновить")
             self.pdf_btn = QPushButton("Создать PDF")
             self.schedule_btn = QPushButton("Записаться на прием")
-            self.cancel_btn = QPushButton("Отменить прием")  # New button for canceling
+            self.cancel_btn = QPushButton("Отменить прием")
 
             # Set cursor for all buttons
-            for btn in [self.add_btn, self.edit_btn, self.delete_btn, self.refresh_btn, self.pdf_btn, self.schedule_btn, self.cancel_btn]:
+            for btn in [self.add_btn, self.edit_btn, self.delete_btn, self.refresh_btn, self.pdf_btn, self.schedule_btn,
+                        self.cancel_btn]:
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
             # Connect signals for admin buttons
@@ -376,7 +424,7 @@ class AppointmentsApp(QMainWindow):
                 btn_layout.addWidget(self.pdf_btn)
             else:
                 btn_layout.addWidget(self.schedule_btn)
-                btn_layout.addWidget(self.cancel_btn)  # Add cancel button for users
+                btn_layout.addWidget(self.cancel_btn)
 
             self.table = QTableWidget()
             self.table.setColumnCount(10)
@@ -412,6 +460,94 @@ class AppointmentsApp(QMainWindow):
         except Exception as e:
             logging.error(f"Ошибка при настройке интерфейса: {str(e)}")
             QMessageBox.critical(self, "Ошибка", f"Ошибка при настройке интерфейса: {str(e)}")
+
+    def search_appointments(self):
+        logging.debug("Поиск приемов")
+        try:
+            doctor_id = self.search_doctor_combo.currentData()
+            search_date_start = self.search_date_start_input.date().toString("yyyy-MM-dd")
+            search_date_end = self.search_date_end_input.date().toString("yyyy-MM-dd")
+            current_date = QDate.currentDate().toString("yyyy-MM-dd")
+
+            # Проверка корректности периода
+            if search_date_start > search_date_end:
+                QMessageBox.warning(self, "Ошибка", "Начальная дата не может быть позже конечной")
+                return
+
+            # Базовый запрос
+            query = """
+                SELECT a.appointmentid, a.patientid, a.medicalcardid, a.doctorid, a.appointmentdate, 
+                       a.starttime, a.endtime, a.status, a.diagnosisid, a.appointmentprice
+                FROM appointment a
+                WHERE 1=1
+            """
+            params = []
+
+            # Добавляем условие по medical_card_id, если оно задано
+            if self.medical_card_id is not None:
+                query += " AND a.medicalcardid = %s"
+                params.append(self.medical_card_id)
+
+            # Проверяем, задан ли врач
+            if doctor_id is not None:
+                query += " AND a.doctorid = %s"
+                params.append(doctor_id)
+
+            # Проверяем, задан ли период дат, и отличается ли он от текущей даты
+            if search_date_start != current_date or search_date_end != current_date:
+                query += " AND a.appointmentdate BETWEEN %s AND %s"
+                params.extend([search_date_start, search_date_end])
+
+            query += " ORDER BY a.appointmentdate, a.starttime"
+
+            self.cursor.execute(query, params)
+            data = self.cursor.fetchall()
+            logging.debug(f"Найдено {len(data)} записей при поиске")
+
+            self.table.setRowCount(len(data))
+            for row_idx, row in enumerate(data):
+                for col_idx, value in enumerate(row):
+                    if col_idx == 1:
+                        value = self.patient_dict.get(value, "Неизвестный пациент")
+                    elif col_idx == 3:
+                        value = self.doctor_dict.get(value, "Неизвестный врач")
+                    elif col_idx == 4 and value is not None:
+                        value = value.strftime("%d.%m.%Y")
+                    elif col_idx in (5, 6) and value is not None:
+                        value = value.strftime("%H:%M")
+                    elif col_idx == 8:
+                        value = self.diagnosis_dict.get(value, "Неизвестный диагноз")
+                    elif col_idx == 9 and value is not None:
+                        value = f"{value:.2f}"
+
+                    item = QTableWidgetItem(str(value) if value is not None else "")
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+                    if col_idx == 8:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                        self.table.resizeRowToContents(row_idx)
+                    else:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+                    if row_idx % 2 == 0:
+                        item.setForeground(QColor(53, 59, 72))
+                    else:
+                        item.setForeground(QColor(47, 53, 66))
+
+                    self.table.setItem(row_idx, col_idx, item)
+
+                self.table.resizeRowToContents(row_idx)
+
+        except Exception as e:
+            logging.error(f"Ошибка при поиске приемов: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Не удалось выполнить поиск: {str(e)}")
+
+    def clear_search(self):
+        logging.debug("Сброс поиска")
+        self.search_doctor_combo.setCurrentIndex(0)  # Сбрасываем выбор врача
+        self.search_date_start_input.setDate(QDate.currentDate())  # Сбрасываем начальную дату
+        self.search_date_end_input.setDate(QDate.currentDate())  # Сбрасываем конечную дату
+        self.load_data()  # Перезагружаем все данные
 
     def cancel_appointment(self):
         logging.debug("Отмена приема")
@@ -626,7 +762,8 @@ class AppointmentsApp(QMainWindow):
                     return
 
                 if not all([doctor_id, medical_card_id, appointment_date, start_time, price]):
-                    QMessageBox.warning(dialog, "Ошибка", "Заполните все обязательные поля, включая врача для установки цены")
+                    QMessageBox.warning(dialog, "Ошибка",
+                                        "Заполните все обязательные поля, включая врача для установки цены")
                     return
 
                 self.cursor.execute("""
@@ -640,7 +777,8 @@ class AppointmentsApp(QMainWindow):
                         (starttime < %s AND endtime >= %s) OR
                         (starttime >= %s AND endtime <= %s)
                     )
-                """, (doctor_id, appointment_date.toString("yyyy-MM-dd"), start_time, start_time, end_time, end_time, start_time, end_time))
+                """, (doctor_id, appointment_date.toString("yyyy-MM-dd"), start_time, start_time, end_time, end_time,
+                      start_time, end_time))
                 overlap_count = self.cursor.fetchone()[0]
                 if overlap_count > 0:
                     QMessageBox.warning(dialog, "Ошибка", "В это время врач уже занят")
@@ -652,7 +790,8 @@ class AppointmentsApp(QMainWindow):
                     """INSERT INTO appointment 
                     (patientid, medicalcardid, doctorid, appointmentdate, starttime, endtime, status, appointmentprice) 
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (self.patient_id, medical_card_id, doctor_id, appointment_date.toString("yyyy-MM-dd"), start_time, end_time, "Назначен", price_value)
+                    (self.patient_id, medical_card_id, doctor_id, appointment_date.toString("yyyy-MM-dd"), start_time,
+                     end_time, "Назначен", price_value)
                 )
                 self.conn.commit()
                 QMessageBox.information(dialog, "Успех", "Вы успешно записались на прием")
@@ -784,7 +923,9 @@ class AppointmentsApp(QMainWindow):
                         item = time_table.item(row, 0)
                         if slot in occupied_slots:
                             item.setBackground(QColor(255, 0, 0))
-                            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                            item.setFlags(item.flags() & ~
+
+                            Qt.ItemFlag.ItemIsSelectable)
                         elif selected_date == current_date and slot < now:
                             item.setBackground(QColor(128, 128, 128))
                             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
@@ -880,7 +1021,8 @@ class AppointmentsApp(QMainWindow):
                             (starttime < %s AND endtime >= %s) OR
                             (starttime >= %s AND endtime <= %s)
                         )
-                    """, (doctor_id, date.toString("yyyy-MM-dd"), starttime, starttime, endtime, endtime, starttime, endtime))
+                    """, (
+                    doctor_id, date.toString("yyyy-MM-dd"), starttime, starttime, endtime, endtime, starttime, endtime))
                     overlap_count = self.cursor.fetchone()[0]
                     if overlap_count > 0:
                         QMessageBox.warning(dialog, "Ошибка", "В это время врач уже занят")
@@ -894,7 +1036,8 @@ class AppointmentsApp(QMainWindow):
                         starttime, endtime, status, appointmentprice) 
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) 
                         RETURNING appointmentid""",
-                        (patient_id, medical_card_id, doctor_id, diagnosis_id, date.toString("yyyy-MM-dd"), starttime, endtime,
+                        (patient_id, medical_card_id, doctor_id, diagnosis_id, date.toString("yyyy-MM-dd"), starttime,
+                         endtime,
                          status or None, price_value))
 
                     new_id = self.cursor.fetchone()[0]
@@ -1210,7 +1353,9 @@ class AppointmentsApp(QMainWindow):
                             (starttime < %s AND endtime >= %s) OR
                             (starttime >= %s AND endtime <= %s)
                         )
-                    """, (doctor_id, date.toString("yyyy-MM-dd"), appointment_id, starttime, starttime, endtime, endtime, starttime, endtime))
+                    """, (
+                    doctor_id, date.toString("yyyy-MM-dd"), appointment_id, starttime, starttime, endtime, endtime,
+                    starttime, endtime))
                     overlap_count = self.cursor.fetchone()[0]
                     if overlap_count > 0:
                         QMessageBox.warning(dialog, "Ошибка", "В это время врач уже занят")
@@ -1230,7 +1375,8 @@ class AppointmentsApp(QMainWindow):
                         status = %s,
                         appointmentprice = %s
                         WHERE appointmentid = %s""",
-                        (patient_id, medical_card_id, doctor_id, diagnosis_id, date.toString("yyyy-MM-dd"), starttime, endtime,
+                        (patient_id, medical_card_id, doctor_id, diagnosis_id, date.toString("yyyy-MM-dd"), starttime,
+                         endtime,
                          status or None, price_value, appointment_id))
 
                     self.conn.commit()
@@ -1286,12 +1432,28 @@ class AppointmentsApp(QMainWindow):
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+            # Проверяем, выбран ли конкретный врач в поиске
+            doctor_id = self.search_doctor_combo.currentData()
+            doctor_name = None
+            if doctor_id is not None:
+                doctor_name = self.search_doctor_combo.currentText()
+                doctor_name_cleaned = doctor_name.replace(" ", "_").replace("'", "").replace(",", "")
+            else:
+                doctor_name_cleaned = None
+
+            # Формируем имя файла в зависимости от условий
             if self.medical_card_id is not None and self.patients:
                 patient_name = self.patients[0][1] if self.patients else "unknown_patient"
                 patient_name_cleaned = patient_name.replace(" ", "_").replace("'", "").replace(",", "")
-                pdf_filename = f"appointments_report_{patient_name_cleaned}_{timestamp}.pdf"
+                if doctor_name_cleaned:
+                    pdf_filename = f"appointments_report_{patient_name_cleaned}_врач_{doctor_name_cleaned}_{timestamp}.pdf"
+                else:
+                    pdf_filename = f"appointments_report_{patient_name_cleaned}_{timestamp}.pdf"
             else:
-                pdf_filename = f"общий_отчёт_{timestamp}.pdf"
+                if doctor_name_cleaned:
+                    pdf_filename = f"общий_отчёт_врач_{doctor_name_cleaned}_{timestamp}.pdf"
+                else:
+                    pdf_filename = f"общий_отчёт_{timestamp}.pdf"
 
             page_width, page_height = A4
             left_margin = 36
@@ -1407,6 +1569,11 @@ class AppointmentsApp(QMainWindow):
             self.load_doctor_prices()
             self.load_diagnoses()
             self.load_data()
+            # Update search doctor combo
+            self.search_doctor_combo.clear()
+            self.search_doctor_combo.addItem("Все врачи", None)
+            for doctor_id, doctor_name in self.doctors:
+                self.search_doctor_combo.addItem(doctor_name, doctor_id)
         except Exception as e:
             logging.error(f"Ошибка при обновлении данных: {str(e)}")
             QMessageBox.critical(self, "Ошибка", f"Не удалось обновить данные: {str(e)}")
@@ -1523,6 +1690,7 @@ class AppointmentsApp(QMainWindow):
         except Exception as e:
             logging.error(f"Ошибка при закрытии соединения: {str(e)}")
         event.accept()
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
