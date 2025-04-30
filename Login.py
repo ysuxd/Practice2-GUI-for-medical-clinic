@@ -579,8 +579,8 @@ class RegisterWindow(QDialog):
 
             # Регистрация нового пользователя с ролью "Пользователь" по умолчанию
             cursor.execute(
-                "INSERT INTO users (login, password, isblocked, role) VALUES (%s, %s, %s, %s) RETURNING login",
-                (login, password, False, "Пользователь")
+                "INSERT INTO users (login, password, isblocked, role, failedattempts) VALUES (%s, %s, %s, %s, %s) RETURNING login",
+                (login, password, False, "Пользователь", 0)
             )
             self.parent().conn.commit()
             QMessageBox.information(self, "Успех", f"Пользователь {login} успешно зарегистрирован!")
@@ -594,9 +594,8 @@ class LoginWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         logging.debug("Инициализация LoginWindow")
-        self.failed_attempts = {}
         self.setWindowTitle("Медицинская информационная система - Авторизация")
-        self.setFixedSize(400, 350)  # Увеличил размер окна для новой кнопки
+        self.setFixedSize(400, 350)
         self.setWindowIcon(QIcon("icon.jpg"))
 
         # Цветовая схема
@@ -807,14 +806,26 @@ class LoginWindow(QMainWindow):
             return
 
         try:
-            # Проверяем, не заблокирован ли пользователь
+            # Проверяем, существует ли пользователь
             self.cursor.execute(
-                "SELECT isblocked FROM users WHERE login = %s",
+                "SELECT isblocked, failedattempts FROM users WHERE login = %s",
                 (login,)
             )
-            user_blocked = self.cursor.fetchone()
+            result = self.cursor.fetchone()
 
-            if user_blocked and user_blocked[0]:
+            if not result:  # Если пользователь не существует
+                QMessageBox.warning(
+                    self,
+                    "Ошибка",
+                    "Пользователь с таким логином не существует."
+                )
+                self.password_input.clear()
+                self.password_input.setFocus()
+                return
+
+            # Пользователь существует, проверяем блокировку
+            is_blocked, failed_attempts = result
+            if is_blocked:
                 QMessageBox.warning(self, "Ошибка", "Ваш аккаунт заблокирован. Обратитесь к администратору.")
                 self.password_input.clear()
                 self.password_input.setFocus()
@@ -822,14 +833,20 @@ class LoginWindow(QMainWindow):
 
             # Проверка логина, пароля и получение user_id и роли
             self.cursor.execute(
-                "SELECT userid, login, isblocked, role FROM users WHERE login = %s AND password = %s",
+                "SELECT userid, login, isblocked, role, failedattempts FROM users WHERE login = %s AND password = %s",
                 (login, password)
             )
             user = self.cursor.fetchone()
 
             if user is None:
-                self.failed_attempts[login] = self.failed_attempts.get(login, 0) + 1
-                if self.failed_attempts[login] >= 3:
+                # Увеличиваем счетчик неудачных попыток
+                self.cursor.execute(
+                    "UPDATE users SET failedattempts = failedattempts + 1 WHERE login = %s RETURNING failedattempts",
+                    (login,)
+                )
+                new_failed_attempts = self.cursor.fetchone()[0]
+
+                if new_failed_attempts >= 3:
                     self.cursor.execute(
                         "UPDATE users SET isblocked = TRUE WHERE login = %s",
                         (login,)
@@ -840,9 +857,9 @@ class LoginWindow(QMainWindow):
                         "Ошибка",
                         f"Неверный логин или пароль. Аккаунт {login} заблокирован. Обратитесь к администратору"
                     )
-                    del self.failed_attempts[login]
                 else:
-                    attempts_left = 3 - self.failed_attempts[login]
+                    attempts_left = 3 - new_failed_attempts
+                    self.conn.commit()
                     QMessageBox.warning(
                         self,
                         "Ошибка",
@@ -852,11 +869,13 @@ class LoginWindow(QMainWindow):
                 self.password_input.setFocus()
                 return
 
-            # Если авторизация успешна, сбрасываем счетчик попыток
-            if login in self.failed_attempts:
-                del self.failed_attempts[login]
-
-            user_id, login, isblocked, role = user
+            # Если авторизация успешна, сбрасываем счетчик неудачных попыток
+            user_id, login, isblocked, role, failed_attempts = user
+            self.cursor.execute(
+                "UPDATE users SET failedattempts = 0 WHERE login = %s",
+                (login,)
+            )
+            self.conn.commit()
 
             if isblocked:
                 QMessageBox.warning(self, "Ошибка", "Пользователь заблокирован")
